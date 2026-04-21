@@ -217,6 +217,15 @@ def infer() -> Any:
             "timestamp": time.time(),
         }
 
+    print(
+        "[CLOUD INFER] "
+        f"device={device_id} "
+        f"label={label} "
+        f"confidence={confidence:.2f} "
+        f"latency_ms={latency_ms:.1f}",
+        flush=True,
+    )
+
     return jsonify({"meme": label, "confidence": round(confidence, 4)})
 
 

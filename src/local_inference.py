@@ -56,6 +56,13 @@ try:
 except ValueError:
     CLOUD_RESULT_TTL_SEC = 1.5
 
+CLOUD_LOG_EVENTS = os.getenv("CLOUD_LOG_EVENTS", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -349,6 +356,7 @@ def main() -> None:
 
     mp_holistic, mp_draw = get_holistic_modules()
     layout_mode = "webcam_main"
+    show_face_markers = True
     last_label: Optional[str] = None
     last_conf = 0.0
     last_source = "LOCAL"
@@ -405,7 +413,7 @@ def main() -> None:
                     results.right_hand_landmarks,
                     mp_holistic.HAND_CONNECTIONS,
                 )
-            if results.face_landmarks:
+            if show_face_markers and results.face_landmarks:
                 mp_draw.draw_landmarks(
                     frame,
                     results.face_landmarks,
@@ -451,6 +459,24 @@ def main() -> None:
                         cloud_label, cloud_conf, cloud_latency_ms = query_cloud(keypoints)
                         last_cloud_query_ts = now_ts
                         last_cloud_latency_ms = cloud_latency_ms
+                        if CLOUD_LOG_EVENTS:
+                            if cloud_label:
+                                print(
+                                    "[CLOUD FALLBACK] "
+                                    f"req={cloud_request_count} "
+                                    f"local={local_label}:{local_conf:.2f} "
+                                    f"cloud={cloud_label}:{cloud_conf:.2f} "
+                                    f"latency_ms={cloud_latency_ms:.1f}",
+                                    flush=True,
+                                )
+                            else:
+                                print(
+                                    "[CLOUD FALLBACK] "
+                                    f"req={cloud_request_count} "
+                                    f"local={local_label}:{local_conf:.2f} "
+                                    "cloud=unavailable",
+                                    flush=True,
+                                )
                         if cloud_label:
                             cloud_success_count += 1
                             last_cloud_label = cloud_label
@@ -555,13 +581,24 @@ def main() -> None:
                 2,
             )
 
+            face_marker_label = "ON" if show_face_markers else "OFF"
+            cv2.putText(
+                display_frame,
+                f"Face markers: {face_marker_label}",
+                (12, 212 if neutral_detected else 182),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.56,
+                (240, 240, 240),
+                2,
+            )
+
             cv2.putText(
                 display_frame,
                 (
                     f"Cloud req/success: {cloud_request_count}/{cloud_success_count} "
                     f"last={last_cloud_latency_ms:.0f}ms"
                 ),
-                (12, 212 if neutral_detected else 182),
+                (12, 242 if neutral_detected else 212),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.56,
                 (240, 240, 240),
@@ -575,7 +612,7 @@ def main() -> None:
                 cv2.putText(
                     display_frame,
                     f"FPS: {fps:.1f}",
-                    (12, 242 if neutral_detected else 212),
+                    (12, 272 if neutral_detected else 242),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.56,
                     (240, 240, 240),
@@ -584,7 +621,7 @@ def main() -> None:
 
             cv2.putText(
                 display_frame,
-                "Press t layout, c camera, q quit",
+                "Press t layout, c camera, f face, q quit",
                 (12, display_frame.shape[0] - 16),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
@@ -623,6 +660,9 @@ def main() -> None:
                 available_cameras = refreshed_cameras
                 selected_camera_id = next_camera_id
                 print(f"Switched to camera {selected_camera_id}")
+            if key == ord("f"):
+                show_face_markers = not show_face_markers
+                print(f"Face markers {'ON' if show_face_markers else 'OFF'}")
             if key == ord("q"):
                 break
 

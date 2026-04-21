@@ -304,6 +304,8 @@ During local inference, press `t` to toggle layout between webcam-main and meme-
 
 During local inference, press `c` to cycle between detected camera IDs.
 
+During local inference, press `f` to toggle face landmark markers on/off in the live view.
+
 If the predicted label is `neutral`, the app intentionally shows no meme image.
 
 Important: do not run `src/local_inference.py` on a headless EC2 instance. It requires a local webcam/display. Run local inference on your MacBook and keep EC2 for cloud API.
