@@ -1,0 +1,39 @@
+Loaded samples: 2256
+Feature dimension: 333
+Class distribution:
+- girl_look_fire: 322
+- hmm-eye: 344
+- monkey-pointing: 347
+- monkey-thinking-monkey: 323
+- neutral: 293
+- side-eye: 306
+- think-better: 321
+
+Evaluation scope: holdout test split
+Quick grid-search complete. Best f1_macro: 1.0000, Best params: {'class_weight': None, 'max_depth': None, 'max_features': 'sqrt', 'min_samples_leaf': 1, 'n_estimators': 150}
+
+Classification report:
+                        precision    recall  f1-score   support
+
+        girl_look_fire       1.00      1.00      1.00        64
+       monkey-pointing       1.00      1.00      1.00        70
+monkey-thinking-monkey       1.00      1.00      1.00        65
+              side-eye       1.00      1.00      1.00        61
+          think-better       1.00      1.00      1.00        64
+               hmm-eye       1.00      1.00      1.00        69
+               neutral       1.00      1.00      1.00        59
+
+              accuracy                           1.00       452
+             macro avg       1.00      1.00      1.00       452
+          weighted avg       1.00      1.00      1.00       452
+
+
+Confusion matrix:
+true\pred               girl_look_fire          monkey-pointing         monkey-thinking-monkey  side-eye                think-better            hmm-eye                 neutral                 
+girl_look_fire          64                      0                       0                       0                       0                       0                       0                       
+monkey-pointing         0                       70                      0                       0                       0                       0                       0                       
+monkey-thinking-monkey  0                       0                       65                      0                       0                       0                       0                       
+side-eye                0                       0                       0                       61                      0                       0                       0                       
+think-better            0                       0                       0                       0                       64                      0                       0                       
+hmm-eye                 0                       0                       0                       0                       0                       69                      0                       
+neutral                 0                       0                       0                       0                       0                       0                       59                      
