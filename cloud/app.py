@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from collections import Counter
 import os
 import pickle
 from pathlib import Path
@@ -35,6 +36,12 @@ app = Flask(__name__)
 MODEL_LOCK = Lock()
 MODEL: Any = None
 MODEL_VERSION: float | None = None
+METRICS_LOCK = Lock()
+INFER_REQUEST_COUNT = 0
+INFER_DEVICE_COUNTS: Counter[str] = Counter()
+INFER_LABEL_COUNTS: Counter[str] = Counter()
+INFER_LATENCY_TOTAL_MS = 0.0
+LAST_INFER: dict[str, Any] = {}
 
 
 def load_model() -> Any:
@@ -166,7 +173,11 @@ def reload_model_endpoint() -> Any:
 
 @app.post("/infer")
 def infer() -> Any:
+    global INFER_REQUEST_COUNT, INFER_LATENCY_TOTAL_MS, LAST_INFER
+
+    started_at = time.perf_counter()
     payload = request.get_json(silent=True) or {}
+    device_id = str(payload.get("device_id", "unknown-device")).strip() or "unknown-device"
 
     with MODEL_LOCK:
         model_snapshot = MODEL
@@ -191,8 +202,40 @@ def infer() -> Any:
     best_idx = int(np.argmax(probabilities))
     label = str(model_snapshot.classes_[best_idx])
     confidence = float(probabilities[best_idx])
+    latency_ms = (time.perf_counter() - started_at) * 1000.0
+
+    with METRICS_LOCK:
+        INFER_REQUEST_COUNT += 1
+        INFER_DEVICE_COUNTS[device_id] += 1
+        INFER_LABEL_COUNTS[label] += 1
+        INFER_LATENCY_TOTAL_MS += latency_ms
+        LAST_INFER = {
+            "device_id": device_id,
+            "label": label,
+            "confidence": round(confidence, 4),
+            "latency_ms": round(latency_ms, 2),
+            "timestamp": time.time(),
+        }
 
     return jsonify({"meme": label, "confidence": round(confidence, 4)})
+
+
+@app.get("/metrics")
+def metrics() -> Any:
+    with METRICS_LOCK:
+        infer_count = INFER_REQUEST_COUNT
+        avg_latency = (
+            round(INFER_LATENCY_TOTAL_MS / infer_count, 2) if infer_count > 0 else 0.0
+        )
+        return jsonify(
+            {
+                "infer_request_count": infer_count,
+                "infer_device_counts": dict(INFER_DEVICE_COUNTS),
+                "infer_label_counts": dict(INFER_LABEL_COUNTS),
+                "infer_avg_latency_ms": avg_latency,
+                "last_infer": LAST_INFER,
+            }
+        )
 
 
 @app.post("/correct")

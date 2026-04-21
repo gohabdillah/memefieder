@@ -26,7 +26,12 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT_DIR / "models" / "local_model.pkl"
 MEMES_DIR = ROOT_DIR / "memes"
 
-CONFIDENCE_THRESHOLD = 0.75
+try:
+    CONFIDENCE_THRESHOLD = float(os.getenv("LOCAL_CONFIDENCE_THRESHOLD", "0.75"))
+except ValueError:
+    CONFIDENCE_THRESHOLD = 0.75
+
+CONFIDENCE_THRESHOLD = max(0.0, min(1.0, CONFIDENCE_THRESHOLD))
 CLOUD_URL = os.getenv("CLOUD_URL", "http://localhost:5000").rstrip("/")
 DEVICE_ID = os.getenv("DEVICE_ID", socket.gethostname())
 NEUTRAL_LABEL = "neutral"
@@ -40,6 +45,16 @@ try:
     CLOUD_RETRIES = max(1, int(os.getenv("CLOUD_RETRIES", "2")))
 except ValueError:
     CLOUD_RETRIES = 2
+
+try:
+    CLOUD_MIN_INTERVAL_SEC = max(0.0, float(os.getenv("CLOUD_MIN_INTERVAL_SEC", "0.35")))
+except ValueError:
+    CLOUD_MIN_INTERVAL_SEC = 0.35
+
+try:
+    CLOUD_RESULT_TTL_SEC = max(0.0, float(os.getenv("CLOUD_RESULT_TTL_SEC", "1.5")))
+except ValueError:
+    CLOUD_RESULT_TTL_SEC = 1.5
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,6 +77,35 @@ def parse_args() -> argparse.Namespace:
         "--list-cameras",
         action="store_true",
         help="List detected camera indices and exit.",
+    )
+    parser.add_argument(
+        "--frame-width",
+        type=int,
+        default=int(os.getenv("FRAME_WIDTH", "640")),
+        help="Capture width (default: 640). Lower is faster.",
+    )
+    parser.add_argument(
+        "--frame-height",
+        type=int,
+        default=int(os.getenv("FRAME_HEIGHT", "480")),
+        help="Capture height (default: 480). Lower is faster.",
+    )
+    parser.add_argument(
+        "--model-complexity",
+        type=int,
+        choices=[0, 1, 2],
+        default=int(os.getenv("HOLISTIC_MODEL_COMPLEXITY", "1")),
+        help="MediaPipe Holistic model complexity: 0 (fastest) to 2 (slowest).",
+    )
+    parser.add_argument(
+        "--disable-face-refine",
+        action="store_true",
+        help="Disable face landmark refinement for better FPS.",
+    )
+    parser.add_argument(
+        "--show-fps",
+        action="store_true",
+        help="Display FPS in the overlay.",
     )
     return parser.parse_args()
 
@@ -104,12 +148,13 @@ def run_local_prediction(model, keypoints: np.ndarray) -> tuple[str, float]:
     return label, confidence
 
 
-def query_cloud(keypoints: np.ndarray) -> tuple[Optional[str], float]:
+def query_cloud(keypoints: np.ndarray) -> tuple[Optional[str], float, float]:
     payload = {
         "keypoints": keypoints.tolist(),
         "device_id": DEVICE_ID,
     }
     for attempt in range(CLOUD_RETRIES):
+        start = time.perf_counter()
         try:
             response = requests.post(
                 f"{CLOUD_URL}/infer",
@@ -120,14 +165,15 @@ def query_cloud(keypoints: np.ndarray) -> tuple[Optional[str], float]:
             data = response.json()
             label = data.get("meme")
             confidence = float(data.get("confidence", 0.0))
+            latency_ms = (time.perf_counter() - start) * 1000.0
             if not isinstance(label, str):
-                return None, 0.0
-            return label, confidence
+                return None, 0.0, latency_ms
+            return label, confidence, latency_ms
         except (requests.RequestException, ValueError, TypeError):
             if attempt < CLOUD_RETRIES - 1:
                 time.sleep(0.05 * (2**attempt))
 
-    return None, 0.0
+    return None, 0.0, 0.0
 
 
 def overlay_meme(
@@ -292,6 +338,9 @@ def main() -> None:
     except RuntimeError as error:
         raise SystemExit(f"{error}. Check camera permissions/device ID.") from error
 
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, max(160, args.frame_width))
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, max(120, args.frame_height))
+
     if available_cameras:
         print(f"Detected cameras: {available_cameras}")
     else:
@@ -303,14 +352,24 @@ def main() -> None:
     last_label: Optional[str] = None
     last_conf = 0.0
     last_source = "LOCAL"
+    cloud_request_count = 0
+    cloud_success_count = 0
+    last_cloud_latency_ms = 0.0
+    last_cloud_label: Optional[str] = None
+    last_cloud_conf = 0.0
+    last_cloud_response_ts = 0.0
+    last_cloud_query_ts = 0.0
+    fps = 0.0
+    prev_frame_ts = time.perf_counter()
 
     with mp_holistic.Holistic(
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5,
-        model_complexity=1,
-        refine_face_landmarks=True,
+        model_complexity=args.model_complexity,
+        refine_face_landmarks=not args.disable_face_refine,
     ) as holistic:
         while True:
+            frame_start_ts = time.perf_counter()
             ok, frame = cap.read()
             if not ok:
                 break
@@ -386,10 +445,24 @@ def main() -> None:
 
                 # Neutral is an explicit "no meme" state; avoid cloud overriding it.
                 if local_label != NEUTRAL_LABEL and local_conf < CONFIDENCE_THRESHOLD:
-                    cloud_label, cloud_conf = query_cloud(keypoints)
-                    if cloud_label:
-                        final_label = cloud_label
-                        final_conf = cloud_conf
+                    now_ts = time.monotonic()
+                    if now_ts - last_cloud_query_ts >= CLOUD_MIN_INTERVAL_SEC:
+                        cloud_request_count += 1
+                        cloud_label, cloud_conf, cloud_latency_ms = query_cloud(keypoints)
+                        last_cloud_query_ts = now_ts
+                        last_cloud_latency_ms = cloud_latency_ms
+                        if cloud_label:
+                            cloud_success_count += 1
+                            last_cloud_label = cloud_label
+                            last_cloud_conf = cloud_conf
+                            last_cloud_response_ts = now_ts
+
+                    if (
+                        last_cloud_label is not None
+                        and (now_ts - last_cloud_response_ts) <= CLOUD_RESULT_TTL_SEC
+                    ):
+                        final_label = last_cloud_label
+                        final_conf = last_cloud_conf
                         source = "CLOUD"
 
                 last_label = final_label
@@ -481,6 +554,33 @@ def main() -> None:
                 (240, 240, 240),
                 2,
             )
+
+            cv2.putText(
+                display_frame,
+                (
+                    f"Cloud req/success: {cloud_request_count}/{cloud_success_count} "
+                    f"last={last_cloud_latency_ms:.0f}ms"
+                ),
+                (12, 212 if neutral_detected else 182),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.56,
+                (240, 240, 240),
+                2,
+            )
+
+            if args.show_fps:
+                delta = max(1e-6, frame_start_ts - prev_frame_ts)
+                fps = 1.0 / delta
+                prev_frame_ts = frame_start_ts
+                cv2.putText(
+                    display_frame,
+                    f"FPS: {fps:.1f}",
+                    (12, 242 if neutral_detected else 212),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.56,
+                    (240, 240, 240),
+                    2,
+                )
 
             cv2.putText(
                 display_frame,

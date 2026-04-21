@@ -37,6 +37,26 @@ memefieder/
     └── poses.md
 ```
 
+## Architecture Overview
+
+Memefieder uses an edge-cloud split architecture:
+
+1. Edge device (MacBook): captures webcam frames, extracts 333-dim holistic keypoints, runs local model inference, and renders meme overlay.
+2. Cloud server (EC2): hosts Flask/Gunicorn API for fallback inference and correction-driven retraining.
+3. Decision path: if local confidence is >= 0.75, use local prediction; otherwise call cloud `/infer` and use cloud result.
+
+High-level flow:
+
+```text
+MacBook webcam -> MediaPipe Holistic -> Local model prediction
+            | confidence < 0.75
+            v
+          EC2 cloud /infer
+            |
+            v
+        final label + meme overlay
+```
+
 ## Requirements
 
 - Python 3.10+
@@ -161,6 +181,73 @@ If port `5000` is unavailable on your machine, use another port:
 FLASK_APP=cloud/app.py flask run --host 0.0.0.0 --port 5050
 ```
 
+### Run Cloud Server with Gunicorn (recommended for demo/prod)
+
+Gunicorn is a production WSGI server that runs multiple worker processes, which is better for concurrent requests than Flask's built-in development server.
+
+Install cloud dependencies (includes Gunicorn):
+
+```bash
+pip install -r cloud/requirements.txt
+```
+
+Run Gunicorn from repository root:
+
+```bash
+gunicorn --chdir cloud app:app --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 60
+```
+
+Quick health check:
+
+```bash
+curl http://localhost:5000/health
+```
+
+On EC2, open inbound TCP 5000 in the Security Group, then test from your laptop:
+
+```bash
+curl http://<EC2_PUBLIC_IP>:5000/health
+```
+
+### EC2 Setup Commands (Ubuntu)
+
+Use these commands on EC2 to run cloud inference reliably:
+
+```bash
+cd ~/memefieder
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install --upgrade pip
+python3 -m pip install -r cloud/requirements.txt
+python3 cloud/cloud_train.py
+gunicorn --chdir cloud app:app --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 60
+```
+
+Optional systemd service (auto-start on reboot):
+
+```bash
+sudo tee /etc/systemd/system/memefieder-cloud.service >/dev/null <<'EOF'
+[Unit]
+Description=Memefieder Cloud API (Gunicorn)
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/memefieder
+Environment=PATH=/home/ubuntu/memefieder/.venv/bin
+ExecStart=/home/ubuntu/memefieder/.venv/bin/gunicorn --chdir cloud app:app --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 60
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now memefieder-cloud
+sudo systemctl status memefieder-cloud --no-pager
+curl http://localhost:5000/health
+```
+
 ## 5. Run Local Real-Time Inference
 
 Start local webcam inference:
@@ -187,6 +274,24 @@ Optional cloud URL override:
 CLOUD_URL=http://localhost:5000 python src/local_inference.py
 ```
 
+For EC2 cloud fallback from your MacBook:
+
+```bash
+CLOUD_URL=http://<EC2_PUBLIC_IP>:5000 python src/local_inference.py
+```
+
+Fast profile (recommended when webcam feels slow):
+
+```bash
+CLOUD_URL=http://<EC2_PUBLIC_IP>:5000 \
+CLOUD_TIMEOUT_SEC=0.25 CLOUD_RETRIES=1 \
+CLOUD_MIN_INTERVAL_SEC=0.40 CLOUD_RESULT_TTL_SEC=1.5 \
+LOCAL_CONFIDENCE_THRESHOLD=0.70 \
+python src/local_inference.py --camera-id 1 --max-cameras 2 --frame-width 640 --frame-height 480 --model-complexity 0 --disable-face-refine --show-fps
+```
+
+This profile reduces cloud blocking and Holistic compute load. Use a higher threshold for better cloud usage (`0.75`) or a lower threshold for better FPS (`0.65` to `0.70`).
+
 If cloud runs on port `5050`:
 
 ```bash
@@ -200,6 +305,32 @@ During local inference, press `t` to toggle layout between webcam-main and meme-
 During local inference, press `c` to cycle between detected camera IDs.
 
 If the predicted label is `neutral`, the app intentionally shows no meme image.
+
+Important: do not run `src/local_inference.py` on a headless EC2 instance. It requires a local webcam/display. Run local inference on your MacBook and keep EC2 for cloud API.
+
+## Correct Demo Workflow (MacBook + EC2)
+
+1. Start cloud API on EC2 (Gunicorn or systemd service).
+2. Verify EC2 health endpoint from EC2 and from your MacBook:
+
+```bash
+curl http://localhost:5000/health
+curl http://<EC2_PUBLIC_IP>:5000/health
+```
+
+3. On MacBook, run local inference against EC2:
+
+```bash
+CLOUD_URL=http://<EC2_PUBLIC_IP>:5000 python src/local_inference.py
+```
+
+4. Stand in front of webcam:
+- high-confidence frames use local prediction directly
+- low-confidence frames (< 0.75) call EC2 `/infer` for second opinion
+
+5. Meme overlay updates from the final label, demonstrating both:
+- local real-time inference
+- live cloud communication fallback
 
 ## Cloud API
 
@@ -221,6 +352,33 @@ Response:
   "meme": "think-better",
   "confidence": 0.95
 }
+```
+
+### `GET /metrics`
+
+Returns cloud fallback telemetry counters and latency summary:
+
+```json
+{
+  "infer_request_count": 42,
+  "infer_device_counts": {"abdillahs-macbook-pro": 42},
+  "infer_label_counts": {"side-eye": 10, "neutral": 8},
+  "infer_avg_latency_ms": 18.7,
+  "last_infer": {
+    "device_id": "abdillahs-macbook-pro",
+    "label": "side-eye",
+    "confidence": 0.91,
+    "latency_ms": 16.2,
+    "timestamp": 1776781234.56
+  }
+}
+```
+
+Query from EC2 or your MacBook:
+
+```bash
+curl http://localhost:5000/metrics
+curl http://<EC2_PUBLIC_IP>:5000/metrics
 ```
 
 ### `POST /correct`
@@ -253,3 +411,44 @@ Corrections are buffered and trigger cloud retraining every 20 samples.
 
 - Meme images in `memes/` are starter placeholders. Replace with your preferred PNG assets.
 - Train models after collecting data before running inference.
+
+## Model Performance
+
+Loaded samples: 2256
+Feature dimension: 333
+Class distribution:
+- girl_look_fire: 322
+- hmm-eye: 344
+- monkey-pointing: 347
+- monkey-thinking-monkey: 323
+- neutral: 293
+- side-eye: 306
+- think-better: 321
+
+Evaluation scope: holdout test split
+
+Classification report:
+                        precision    recall  f1-score   support
+
+        girl_look_fire       1.00      1.00      1.00        64
+       monkey-pointing       1.00      1.00      1.00        70
+monkey-thinking-monkey       1.00      1.00      1.00        65
+              side-eye       1.00      1.00      1.00        61
+          think-better       1.00      1.00      1.00        64
+               hmm-eye       1.00      1.00      1.00        69
+               neutral       1.00      1.00      1.00        59
+
+              accuracy                           1.00       452
+             macro avg       1.00      1.00      1.00       452
+          weighted avg       1.00      1.00      1.00       452
+
+
+Confusion matrix:
+true\pred               girl_look_fire          monkey-pointing         monkey-thinking-monkey  side-eye                think-better            hmm-eye                 neutral                 
+girl_look_fire          64                      0                       0                       0                       0                       0                       0                       
+monkey-pointing         0                       70                      0                       0                       0                       0                       0                       
+monkey-thinking-monkey  0                       0                       65                      0                       0                       0                       0                       
+side-eye                0                       0                       0                       61                      0                       0                       0                       
+think-better            0                       0                       0                       0                       64                      0                       0                       
+hmm-eye                 0                       0                       0                       0                       0                       69                      0                       
+neutral                 0                       0                       0                       0                       0                       0                       59                      
