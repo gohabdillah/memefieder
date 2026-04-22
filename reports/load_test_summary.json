@@ -1,0 +1,15 @@
+{
+  "total_requests": 150,
+  "success_count": 150,
+  "success_rate": 100.0,
+  "duration_seconds": 7.331,
+  "throughput_rps": 20.46,
+  "latency_ms": {
+    "min": 611.08,
+    "p50": 801.82,
+    "p95": 1910.62,
+    "p99": 3452.54,
+    "max": 3979.78
+  },
+  "error_samples": []
+}

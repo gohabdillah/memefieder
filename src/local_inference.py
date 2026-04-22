@@ -357,6 +357,7 @@ def main() -> None:
     mp_holistic, mp_draw = get_holistic_modules()
     layout_mode = "webcam_main"
     show_face_markers = True
+    clean_demo_mode = False
     last_label: Optional[str] = None
     last_conf = 0.0
     last_source = "LOCAL"
@@ -395,30 +396,31 @@ def main() -> None:
                 ]
             )
 
-            if results.pose_landmarks:
-                mp_draw.draw_landmarks(
-                    frame,
-                    results.pose_landmarks,
-                    mp_holistic.POSE_CONNECTIONS,
-                )
-            if results.left_hand_landmarks:
-                mp_draw.draw_landmarks(
-                    frame,
-                    results.left_hand_landmarks,
-                    mp_holistic.HAND_CONNECTIONS,
-                )
-            if results.right_hand_landmarks:
-                mp_draw.draw_landmarks(
-                    frame,
-                    results.right_hand_landmarks,
-                    mp_holistic.HAND_CONNECTIONS,
-                )
-            if show_face_markers and results.face_landmarks:
-                mp_draw.draw_landmarks(
-                    frame,
-                    results.face_landmarks,
-                    mp_holistic.FACEMESH_CONTOURS,
-                )
+            if not clean_demo_mode:
+                if results.pose_landmarks:
+                    mp_draw.draw_landmarks(
+                        frame,
+                        results.pose_landmarks,
+                        mp_holistic.POSE_CONNECTIONS,
+                    )
+                if results.left_hand_landmarks:
+                    mp_draw.draw_landmarks(
+                        frame,
+                        results.left_hand_landmarks,
+                        mp_holistic.HAND_CONNECTIONS,
+                    )
+                if results.right_hand_landmarks:
+                    mp_draw.draw_landmarks(
+                        frame,
+                        results.right_hand_landmarks,
+                        mp_holistic.HAND_CONNECTIONS,
+                    )
+                if show_face_markers and results.face_landmarks:
+                    mp_draw.draw_landmarks(
+                        frame,
+                        results.face_landmarks,
+                        mp_holistic.FACEMESH_CONTOURS,
+                    )
 
             if has_any_landmarks:
                 keypoints = extract_keypoints(
@@ -500,134 +502,139 @@ def main() -> None:
             if neutral_detected:
                 meme = None
 
-            if layout_mode == "meme_main":
+            if clean_demo_mode:
+                display_frame = frame.copy()
+                if meme is not None:
+                    overlay_meme(display_frame, meme)
+            elif layout_mode == "meme_main":
                 display_frame = compose_meme_main_view(frame, meme, predicted_label=last_label)
             else:
                 display_frame = frame.copy()
                 if meme is not None:
                     overlay_meme(display_frame, meme)
 
-            if last_label:
-                pose_text = f"Pose: {last_label} ({last_conf:.2f})"
-                if not has_any_landmarks:
-                    pose_text += " [last]"
+            if not clean_demo_mode:
+                if last_label:
+                    pose_text = f"Pose: {last_label} ({last_conf:.2f})"
+                    if not has_any_landmarks:
+                        pose_text += " [last]"
+                    cv2.putText(
+                        display_frame,
+                        pose_text,
+                        (12, 32),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.75,
+                        (40, 255, 40),
+                        2,
+                    )
+                    cv2.putText(
+                        display_frame,
+                        f"Source: {last_source} (threshold={CONFIDENCE_THRESHOLD:.2f})",
+                        (12, 62),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.65,
+                        (240, 240, 240),
+                        2,
+                    )
+                    if neutral_detected:
+                        cv2.putText(
+                            display_frame,
+                            "Neutral detected: no meme",
+                            (12, 92),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.65,
+                            (0, 215, 255),
+                            2,
+                        )
+                else:
+                    cv2.putText(
+                        display_frame,
+                        "No holistic landmarks detected",
+                        (12, 32),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.75,
+                        (30, 30, 255),
+                        2,
+                    )
+
                 cv2.putText(
                     display_frame,
-                    pose_text,
-                    (12, 32),
+                    f"Feature dim: {KEYPOINT_DIM}",
+                    (12, 122 if neutral_detected else 92),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.75,
-                    (40, 255, 40),
-                    2,
-                )
-                cv2.putText(
-                    display_frame,
-                    f"Source: {last_source} (threshold={CONFIDENCE_THRESHOLD:.2f})",
-                    (12, 62),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65,
+                    0.6,
                     (240, 240, 240),
                     2,
                 )
-                if neutral_detected:
-                    cv2.putText(
-                        display_frame,
-                        "Neutral detected: no meme",
-                        (12, 92),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.65,
-                        (0, 215, 255),
-                        2,
-                    )
-            else:
+
+                layout_label = "MEME_MAIN" if layout_mode == "meme_main" else "WEBCAM_MAIN"
                 cv2.putText(
                     display_frame,
-                    "No holistic landmarks detected",
-                    (12, 32),
+                    f"Layout: {layout_label}",
+                    (12, 152 if neutral_detected else 122),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.75,
-                    (30, 30, 255),
+                    0.6,
+                    (240, 240, 240),
                     2,
                 )
 
-            cv2.putText(
-                display_frame,
-                f"Feature dim: {KEYPOINT_DIM}",
-                (12, 122 if neutral_detected else 92),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (240, 240, 240),
-                2,
-            )
-
-            layout_label = "MEME_MAIN" if layout_mode == "meme_main" else "WEBCAM_MAIN"
-            cv2.putText(
-                display_frame,
-                f"Layout: {layout_label}",
-                (12, 152 if neutral_detected else 122),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (240, 240, 240),
-                2,
-            )
-
-            cv2.putText(
-                display_frame,
-                f"Camera ID: {selected_camera_id}",
-                (12, 182 if neutral_detected else 152),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (240, 240, 240),
-                2,
-            )
-
-            face_marker_label = "ON" if show_face_markers else "OFF"
-            cv2.putText(
-                display_frame,
-                f"Face markers: {face_marker_label}",
-                (12, 212 if neutral_detected else 182),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.56,
-                (240, 240, 240),
-                2,
-            )
-
-            cv2.putText(
-                display_frame,
-                (
-                    f"Cloud req/success: {cloud_request_count}/{cloud_success_count} "
-                    f"last={last_cloud_latency_ms:.0f}ms"
-                ),
-                (12, 242 if neutral_detected else 212),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.56,
-                (240, 240, 240),
-                2,
-            )
-
-            if args.show_fps:
-                delta = max(1e-6, frame_start_ts - prev_frame_ts)
-                fps = 1.0 / delta
-                prev_frame_ts = frame_start_ts
                 cv2.putText(
                     display_frame,
-                    f"FPS: {fps:.1f}",
-                    (12, 272 if neutral_detected else 242),
+                    f"Camera ID: {selected_camera_id}",
+                    (12, 182 if neutral_detected else 152),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (240, 240, 240),
+                    2,
+                )
+
+                face_marker_label = "ON" if show_face_markers else "OFF"
+                cv2.putText(
+                    display_frame,
+                    f"Face markers: {face_marker_label}",
+                    (12, 212 if neutral_detected else 182),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.56,
                     (240, 240, 240),
                     2,
                 )
 
-            cv2.putText(
-                display_frame,
-                "Press t layout, c camera, f face, q quit",
-                (12, display_frame.shape[0] - 16),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (240, 240, 240),
-                2,
-            )
+                cv2.putText(
+                    display_frame,
+                    (
+                        f"Cloud req/success: {cloud_request_count}/{cloud_success_count} "
+                        f"last={last_cloud_latency_ms:.0f}ms"
+                    ),
+                    (12, 242 if neutral_detected else 212),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.56,
+                    (240, 240, 240),
+                    2,
+                )
+
+                if args.show_fps:
+                    delta = max(1e-6, frame_start_ts - prev_frame_ts)
+                    fps = 1.0 / delta
+                    prev_frame_ts = frame_start_ts
+                    cv2.putText(
+                        display_frame,
+                        f"FPS: {fps:.1f}",
+                        (12, 272 if neutral_detected else 242),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.56,
+                        (240, 240, 240),
+                        2,
+                    )
+
+                cv2.putText(
+                    display_frame,
+                    "Press t layout, c camera, f face, h clean, q quit",
+                    (12, display_frame.shape[0] - 16),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (240, 240, 240),
+                    2,
+                )
 
             cv2.imshow("Memefieder - Local Inference", display_frame)
             key = cv2.waitKey(1) & 0xFF
@@ -663,6 +670,9 @@ def main() -> None:
             if key == ord("f"):
                 show_face_markers = not show_face_markers
                 print(f"Face markers {'ON' if show_face_markers else 'OFF'}")
+            if key == ord("h"):
+                clean_demo_mode = not clean_demo_mode
+                print(f"Clean demo mode {'ON' if clean_demo_mode else 'OFF'}")
             if key == ord("q"):
                 break
 

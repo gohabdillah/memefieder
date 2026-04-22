@@ -306,6 +306,8 @@ During local inference, press `c` to cycle between detected camera IDs.
 
 During local inference, press `f` to toggle face landmark markers on/off in the live view.
 
+During local inference, press `h` to toggle clean demo mode (hides all landmark drawings and text overlays, leaving only webcam + meme).
+
 If the predicted label is `neutral`, the app intentionally shows no meme image.
 
 Important: do not run `src/local_inference.py` on a headless EC2 instance. It requires a local webcam/display. Run local inference on your MacBook and keep EC2 for cloud API.
